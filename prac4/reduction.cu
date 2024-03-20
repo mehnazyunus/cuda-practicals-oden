@@ -42,14 +42,14 @@ __global__ void reduction(float *g_odata, float *g_idata)
 
   // first, each thread loads data into shared memory
 
-  temp[tid] = g_idata[tid];
+  temp[tid] = g_idata[tid + blockIdx.x*blockDim.x];
 
-  if (tid == 0)
+  if (tid % blockDim.x == 0)
     printf("Extra elements : %d\n", blockDim.x - power_of_2);
 
   if (tid < blockDim.x - power_of_2)
   {
-    // printf("Adding e xtra: %d\n", tid);
+    // printf("Adding extra: %d\n", tid);
     temp[tid] += temp[tid + power_of_2];
   }
 
@@ -66,8 +66,8 @@ __global__ void reduction(float *g_odata, float *g_idata)
 
   // finally, first thread puts result into global memory
 
-  if (tid == 0)
-    g_odata[0] = temp[0];
+  if (tid % blockDim.x == 0)
+    g_odata[blockIdx.x] = temp[0];
 }
 
 ////////////////////////////////////////////////////////////////////////
@@ -85,16 +85,16 @@ int main(int argc, const char **argv)
 
   findCudaDevice(argc, argv);
 
-  num_blocks = 1; // start with only 1 thread block
-  num_threads = 514;
+  num_blocks = 3; // start with only 1 thread block
+  num_threads = 8;
   num_elements = num_blocks * num_threads;
   mem_size = sizeof(float) * num_elements;
 
   for (h_power_of_2 = 1; h_power_of_2 < num_threads; h_power_of_2 *= 2)
   {
   }
-
-  h_power_of_2 >>= 1;
+  if(h_power_of_2 != num_threads) // if num_threads is not already a power of 2
+    h_power_of_2 >>= 1;
   printf("Highest power of 2 : %d\n", h_power_of_2);
 
   // allocate host memory to store the input data
@@ -112,7 +112,7 @@ int main(int argc, const char **argv)
   // allocate device memory input and output arrays
 
   checkCudaErrors(cudaMalloc((void **)&d_idata, mem_size));
-  checkCudaErrors(cudaMalloc((void **)&d_odata, sizeof(float)));
+  checkCudaErrors(cudaMalloc((void **)&d_odata, sizeof(float)*num_blocks));
 
   // copy host memory to device input array
   checkCudaErrors(cudaMemcpyToSymbol(power_of_2, &h_power_of_2, sizeof(h_power_of_2)));
@@ -126,8 +126,13 @@ int main(int argc, const char **argv)
   getLastCudaError("reduction kernel execution failed");
 
   // copy result from device to host
-  checkCudaErrors(cudaMemcpy(h_data, d_odata, sizeof(float),
+  checkCudaErrors(cudaMemcpy(h_data, d_odata, sizeof(float)*num_blocks,
                              cudaMemcpyDeviceToHost));
+
+  // sum over partial sums
+  for(int i=1; i<num_blocks; ++i) {
+    h_data[0] += h_data[i];
+  }
 
   // check results
 
