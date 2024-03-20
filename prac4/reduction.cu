@@ -1,6 +1,6 @@
 ////////////////////////////////////////////////////////////////////////
 //
-// Practical 4 -- initial code for shared memory reduction for 
+// Practical 4 -- initial code for shared memory reduction for
 //                a single block which is a power of two in size
 //
 ////////////////////////////////////////////////////////////////////////
@@ -13,14 +13,17 @@
 
 #include <helper_cuda.h>
 
+__constant__ int power_of_2;
+
 ////////////////////////////////////////////////////////////////////////
 // CPU routine
 ////////////////////////////////////////////////////////////////////////
 
-float reduction_gold(float* idata, int len) 
+float reduction_gold(float *idata, int len)
 {
   float sum = 0.0f;
-  for(int i=0; i<len; i++) sum += idata[i];
+  for (int i = 0; i < len; i++)
+    sum += idata[i];
 
   return sum;
 }
@@ -31,36 +34,50 @@ float reduction_gold(float* idata, int len)
 
 __global__ void reduction(float *g_odata, float *g_idata)
 {
-    // dynamically allocated shared memory
+  // dynamically allocated shared memory
 
-    extern  __shared__  float temp[];
+  extern __shared__ float temp[];
 
-    int tid = threadIdx.x;
+  int tid = threadIdx.x;
 
-    // first, each thread loads data into shared memory
+  // first, each thread loads data into shared memory
 
-    temp[tid] = g_idata[tid];
+  temp[tid] = g_idata[tid];
 
-    // next, we perform binary tree reduction
+  if (tid == 0)
+    printf("Extra elements : %d\n", blockDim.x - power_of_2);
 
-    for (int d=blockDim.x/2; d>0; d=d/2) {
-      __syncthreads();  // ensure previous step completed 
-      if (tid<d)  temp[tid] += temp[tid+d];
-    }
+  if (tid < blockDim.x - power_of_2)
+  {
+    // printf("Adding e xtra: %d\n", tid);
+    temp[tid] += temp[tid + power_of_2];
+  }
 
-    // finally, first thread puts result into global memory
+  __syncthreads();
 
-    if (tid==0) g_odata[0] = temp[0];
+  // next, we perform binary tree reduction
+
+  for (int d = power_of_2 / 2; d > 0; d = d / 2)
+  {
+    __syncthreads(); // ensure previous step completed
+    if (tid < d)
+      temp[tid] += temp[tid + d];
+  }
+
+  // finally, first thread puts result into global memory
+
+  if (tid == 0)
+    g_odata[0] = temp[0];
 }
-
 
 ////////////////////////////////////////////////////////////////////////
 // Program main
 ////////////////////////////////////////////////////////////////////////
 
-int main( int argc, const char** argv) 
+int main(int argc, const char **argv)
 {
   int num_blocks, num_threads, num_elements, mem_size, shared_mem_size;
+  int h_power_of_2; // highest power of 2 that is closest to num_threads
 
   float *h_data, *d_idata, *d_odata;
 
@@ -68,18 +85,25 @@ int main( int argc, const char** argv)
 
   findCudaDevice(argc, argv);
 
-  num_blocks   = 1;  // start with only 1 thread block
-  num_threads  = 512;
-  num_elements = num_blocks*num_threads;
-  mem_size     = sizeof(float) * num_elements;
+  num_blocks = 1; // start with only 1 thread block
+  num_threads = 514;
+  num_elements = num_blocks * num_threads;
+  mem_size = sizeof(float) * num_elements;
+
+  for (h_power_of_2 = 1; h_power_of_2 < num_threads; h_power_of_2 *= 2)
+  {
+  }
+
+  h_power_of_2 >>= 1;
+  printf("Highest power of 2 : %d\n", h_power_of_2);
 
   // allocate host memory to store the input data
   // and initialize to integer values between 0 and 10
 
-  h_data = (float*) malloc(mem_size);
-      
-  for(int i = 0; i < num_elements; i++) 
-    h_data[i] = floorf(10.0f*(rand()/(float)RAND_MAX));
+  h_data = (float *)malloc(mem_size);
+
+  for (int i = 0; i < num_elements; i++)
+    h_data[i] = floorf(10.0f * (rand() / (float)RAND_MAX));
 
   // compute reference solution
 
@@ -87,34 +111,33 @@ int main( int argc, const char** argv)
 
   // allocate device memory input and output arrays
 
-  checkCudaErrors( cudaMalloc((void**)&d_idata, mem_size) );
-  checkCudaErrors( cudaMalloc((void**)&d_odata, sizeof(float)) );
+  checkCudaErrors(cudaMalloc((void **)&d_idata, mem_size));
+  checkCudaErrors(cudaMalloc((void **)&d_odata, sizeof(float)));
 
   // copy host memory to device input array
-
-  checkCudaErrors( cudaMemcpy(d_idata, h_data, mem_size,
-                              cudaMemcpyHostToDevice) );
+  checkCudaErrors(cudaMemcpyToSymbol(power_of_2, &h_power_of_2, sizeof(h_power_of_2)));
+  checkCudaErrors(cudaMemcpy(d_idata, h_data, mem_size,
+                             cudaMemcpyHostToDevice));
 
   // execute the kernel
 
   shared_mem_size = sizeof(float) * num_threads;
-  reduction<<<num_blocks,num_threads,shared_mem_size>>>(d_odata,d_idata);
+  reduction<<<num_blocks, num_threads, shared_mem_size>>>(d_odata, d_idata);
   getLastCudaError("reduction kernel execution failed");
 
   // copy result from device to host
-
-  checkCudaErrors( cudaMemcpy(h_data, d_odata, sizeof(float),
-                              cudaMemcpyDeviceToHost) );
+  checkCudaErrors(cudaMemcpy(h_data, d_odata, sizeof(float),
+                             cudaMemcpyDeviceToHost));
 
   // check results
 
-  printf("reduction error = %f\n",h_data[0]-sum);
+  printf("reduction error = %f\n", h_data[0] - sum);
 
   // cleanup memory
 
   free(h_data);
-  checkCudaErrors( cudaFree(d_idata) );
-  checkCudaErrors( cudaFree(d_odata) );
+  checkCudaErrors(cudaFree(d_idata));
+  checkCudaErrors(cudaFree(d_odata));
 
   // CUDA exit -- needed to flush printf write buffer
 
